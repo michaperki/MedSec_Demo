@@ -1,36 +1,64 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI Clinical Safety Check — Prototype
 
-## Getting Started
+> **Prototype — for clinician evaluation only. Not for patient care.**
 
-First, run the development server:
+A physician safety-check layer for oncology: given a free-text patient presentation, it surfaces
+dangerous conditions to consider, applicable validated clinical decision rules, what's already
+known, and what's still missing — without ever inventing a value or asserting a diagnosis.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Architecture
+
+```
+Patient presentation → LLM structured extraction → Normalized patient facts
+                                                          │
+                                        ┌─────────────────┴─────────────────┐
+                                        ▼                                   ▼
+                              Candidate risks (LLM)              Rule matching (LLM suggests IDs)
+                                        └─────────────────┬─────────────────┘
+                                                           ▼
+                                          Deterministic rule scoring (code, not the LLM)
+                                                           ▼
+                                                 Safety-check results → React UI
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- **`src/lib/rules/`** — ~10 clinical decision rules (Wells PE/DVT, PERC, HEART, qSOFA, SIRS,
+  CURB-65, MASCC, CISNE, corrected calcium) as structured data + deterministic scoring code. The
+  LLM never computes a score.
+- **`src/lib/llm/`** — the LLM abstraction. `AnthropicProvider` calls the Claude API with a
+  Zod-validated structured output schema; `MockLLMProvider` is a deterministic keyword-based
+  extractor that makes the app fully runnable without an API key (used automatically when
+  `ANTHROPIC_API_KEY` is unset).
+- **`src/lib/patient.ts`** — the normalized `PatientContext` model. Every fact carries
+  `source: "explicit" | "inferred"` — an inference is never silently promoted to a known fact.
+- **`src/lib/data-provider.ts`** / **`demo-cases.ts`** — `PatientDataProvider` abstraction with a
+  `MockPatientDataProvider` seeded with 5 synthetic cases. A future `FHIRPatientDataProvider`
+  plugs into the same interface without touching the rules engine or UI.
+- **`src/app/api/safety-check/route.ts`** — the only server route; runs extraction → rule
+  evaluation and returns a JSON-safe result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Running
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm install
+npm run dev
+```
 
-## Learn More
+Open http://localhost:3000. Without `ANTHROPIC_API_KEY` set, the app runs entirely on the
+deterministic mock extractor — useful for demoing the 5 synthetic cases without any API cost, but
+it only recognizes the phrasing used in those cases (and common synonyms), not open-ended text.
 
-To learn more about Next.js, take a look at the following resources:
+To use the real Claude API:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+npm run dev
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Optional: `ANTHROPIC_MODEL` (defaults to `claude-opus-5`), `LLM_PROVIDER=mock` to force the mock
+extractor even with a key set (useful for offline development/demos).
 
-## Deploy on Vercel
+## What this is not
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+No real EHR integration, no real patient data, no autonomous diagnosis. It is a checklist layer:
+it surfaces validated tools and missing information so a physician doesn't have to remember which
+scoring system applies to the patient in front of them — it never decides anything on its own.
