@@ -81,6 +81,28 @@ export default function Home() {
     setTimings([]);
   }
 
+  function handlePresentationChange(value: string) {
+    const wasUnedited = presentation === selectedCase.todaysEncounter;
+    setPresentation(value);
+
+    // The moment the free text first diverges from the selected demo case,
+    // the demographics/diagnosis/treatment seeded from that case no longer
+    // describe whatever the user is now typing about — sending them anyway
+    // silently blends a stale patient into a fresh presentation (the model
+    // has no way to know they're not still accurate). Only fires on the
+    // transition, so fields the user then fills in by hand afterward are
+    // left alone.
+    if (wasUnedited && value !== selectedCase.todaysEncounter) {
+      setStructuredFields((prev) => ({
+        ...prev,
+        age: undefined,
+        sex: undefined,
+        cancerDiagnosis: undefined,
+        activeTreatment: undefined,
+      }));
+    }
+  }
+
   async function runSafetyCheck() {
     setStatus("running");
     setError(null);
@@ -268,7 +290,7 @@ export default function Home() {
             </label>
             <textarea
               value={presentation}
-              onChange={(e) => setPresentation(e.target.value)}
+              onChange={(e) => handlePresentationChange(e.target.value)}
               rows={7}
               className="mt-1.5 w-full resize-y rounded-md border border-slate-200 p-2.5 text-sm text-slate-800 focus:border-slate-400 focus:outline-none"
               placeholder="Describe the patient's current presentation in free text..."
