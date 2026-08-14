@@ -1,4 +1,4 @@
-import type { SafetyCheckLLMResponse } from "./schema";
+import type { Extraction, Concern } from "./schema";
 
 /**
  * Optional structured fields a physician may fill in. None are required —
@@ -22,51 +22,82 @@ export interface SafetyCheckLLMRequest {
 
 export interface LLMProvider {
   /**
-   * Extracts normalized patient facts and identifies candidate high-risk
-   * conditions worth considering, with suggested applicable rule IDs. The
-   * LLM never computes scores — that is deterministic code downstream.
+   * Stage 1 — structured fact extraction only. Small/fast output, no
+   * clinical judgment. Runs first so the "what we know" panel can render
+   * before candidate identification (stage 2) even starts.
    */
-  runExtraction(request: SafetyCheckLLMRequest): Promise<SafetyCheckLLMResponse>;
+  runExtraction(request: SafetyCheckLLMRequest): Promise<Extraction>;
+
+  /**
+   * Stage 2 — candidate high-risk conditions worth considering, with
+   * suggested applicable rule IDs. The LLM never computes scores — that is
+   * deterministic code downstream. Takes stage 1's output as grounding so it
+   * doesn't have to re-derive facts from raw text.
+   */
+  identifyConcerns(
+    request: SafetyCheckLLMRequest,
+    extraction: Extraction
+  ): Promise<Concern[]>;
 }
 
-export const EXTRACTION_SYSTEM_PROMPT = `You are a clinical information extraction assistant supporting an oncology safety-check tool. You are NOT diagnosing the patient and you NEVER state that a condition is present — you extract what the text says, and separately propose dangerous conditions the physician should consider ruling out.
+export const EXTRACTION_SYSTEM_PROMPT = `You are a clinical information extraction assistant supporting an oncology safety-check tool. Convert the free-text presentation (plus any structured fields provided) into normalized patient facts. You are NOT diagnosing the patient.
 
-Your two jobs, in one JSON response:
+For every fact, mark "source" as "explicit" (directly stated) or "inferred" (a reasonable clinical inference you made, e.g. inferring "active_malignancy" from "metastatic colon cancer on chemotherapy"). Never invent a value that is not supported by the text. If something is not mentioned, omit it entirely — do not guess a "normal" value.
 
-1. EXTRACTION: Convert the free-text presentation (plus any structured fields provided) into normalized patient facts. For every fact, mark "source" as "explicit" (directly stated) or "inferred" (a reasonable clinical inference you made, e.g. inferring "active_malignancy" from "metastatic colon cancer on chemotherapy"). Never invent a value that is not supported by the text. If something is not mentioned, omit it entirely — do not guess a "normal" value.
+Populate "concepts" using ONLY the concept IDs supplied to you (a controlled vocabulary) — do not invent new concept IDs. Populate "labs" using ONLY the lab names supplied to you.
 
-   Populate "concepts" using ONLY the concept IDs supplied to you (a controlled vocabulary) — do not invent new concept IDs. Populate "labs" using ONLY the lab names supplied to you.
+Keep "evidence" fields terse — the exact phrase or a short quote, not a sentence.`;
 
-2. CANDIDATE IDENTIFICATION: List dangerous conditions or complications this presentation should prompt the physician to consider — the things that must not be missed given this patient's cancer status, treatment, and symptoms. For each, give a brief clinical reason tying it to the evidence, list the evidence items, and suggest which of the provided clinical decision rule IDs might help assess it (only suggest rule IDs from the provided list; omit suggestedRuleIds if none apply). Also list any additional information (not covered by the rule's own missing-criteria) that would help evaluate this concern, if relevant.
+export const CONCERN_SYSTEM_PROMPT = `You are a clinical safety-check assistant for oncology. You are NOT diagnosing the patient and you NEVER state that a condition is present — you propose dangerous conditions the physician should consider ruling out, grounded in already-extracted patient facts.
 
-Do not rule anything in or out. Do not use language like "the patient has X" or "diagnosis: X" — describe possibilities to consider, using words like "consider," "potential concern," "cannot exclude." Surface every condition that is clinically warranted by the presentation, not just the most obvious one — cancer patients often have overlapping differentials (e.g. dyspnea can warrant considering PE, an infectious process, and a cardiac cause simultaneously).`;
+List dangerous conditions or complications this presentation should prompt the physician to consider — the things that must not be missed given this patient's cancer status, treatment, and symptoms. For each, give a brief clinical reason tying it to the evidence (under ~30 words), list the evidence items tersely, and suggest which of the provided clinical decision rule IDs might help assess it (only suggest rule IDs from the provided list; omit suggestedRuleIds if none apply). List any additional information (not covered by the rule's own missing-criteria) that would help evaluate this concern, if relevant — keep each item short.
 
-export function buildUserPrompt(
+Do not rule anything in or out. Do not use language like "the patient has X" or "diagnosis: X" — describe possibilities to consider, using words like "consider," "potential concern," "cannot exclude." Surface every condition that is clinically warranted, not just the most obvious one — cancer patients often have overlapping differentials (e.g. dyspnea can warrant considering PE, an infectious process, and a cardiac cause simultaneously). List conditions in descending order of clinical urgency/priority — most time-critical first.`;
+
+function formatStructuredFields(request: SafetyCheckLLMRequest): string | undefined {
+  const sf = request.structuredFields;
+  if (!sf || !Object.values(sf).some((v) => v !== undefined && v !== "")) return undefined;
+  return (
+    "## Additional structured fields entered by the physician\n" +
+    Object.entries(sf)
+      .filter(([, v]) => v !== undefined && v !== "")
+      .map(([k, v]) => `- ${k}: ${v}`)
+      .join("\n")
+  );
+}
+
+export function buildExtractionPrompt(
   request: SafetyCheckLLMRequest,
   conceptIds: readonly string[],
-  labNames: readonly string[],
+  labNames: readonly string[]
+): string {
+  const parts: string[] = [];
+  parts.push("## Patient presentation (free text)\n" + request.presentation.trim());
+
+  const structured = formatStructuredFields(request);
+  if (structured) parts.push(structured);
+
+  parts.push(
+    "## Available concept IDs (use only these for `concepts[].id`)\n" + conceptIds.join(", ")
+  );
+  parts.push("## Available lab names (use only these for `labs[].name`)\n" + labNames.join(", "));
+
+  return parts.join("\n\n");
+}
+
+export function buildConcernPrompt(
+  request: SafetyCheckLLMRequest,
+  extraction: Extraction,
   availableRuleIds: { id: string; name: string; purpose: string }[]
 ): string {
   const parts: string[] = [];
-
   parts.push("## Patient presentation (free text)\n" + request.presentation.trim());
 
-  const sf = request.structuredFields;
-  if (sf && Object.values(sf).some((v) => v !== undefined && v !== "")) {
-    parts.push(
-      "## Additional structured fields entered by the physician\n" +
-        Object.entries(sf)
-          .filter(([, v]) => v !== undefined && v !== "")
-          .map(([k, v]) => `- ${k}: ${v}`)
-          .join("\n")
-    );
-  }
+  const structured = formatStructuredFields(request);
+  if (structured) parts.push(structured);
 
-  parts.push(
-    "## Available concept IDs (use only these for `concepts[].id`)\n" +
-      conceptIds.join(", ")
-  );
-  parts.push("## Available lab names (use only these for `labs[].name`)\n" + labNames.join(", "));
+  parts.push("## Already-extracted patient facts (stage 1 output — ground your answer in this)\n" + JSON.stringify(extraction));
+
   parts.push(
     "## Available clinical decision rules (use only these IDs for `suggestedRuleIds`)\n" +
       availableRuleIds.map((r) => `- ${r.id}: ${r.name} — ${r.purpose}`).join("\n")

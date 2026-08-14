@@ -1,24 +1,27 @@
 import type { ConceptId, LabName } from "../concepts";
-import type { Concern, Extraction, SafetyCheckLLMResponse } from "./schema";
+import type { Concern, Extraction } from "./schema";
 import type { LLMProvider, SafetyCheckLLMRequest } from "./provider";
 
+function requestText(request: SafetyCheckLLMRequest): string {
+  return [request.presentation, ...Object.values(request.structuredFields ?? {})]
+    .filter(Boolean)
+    .join("\n");
+}
+
 /**
- * Deterministic, keyword-based stand-in for the LLM extraction call. Lets
- * the prototype run end-to-end (including all demo cases) with no API key
+ * Deterministic, keyword-based stand-in for the LLM calls. Lets the
+ * prototype run end-to-end (including all demo cases) with no API key
  * configured. Not a substitute for the real model on free-form input — it
  * recognizes the phrasing used in this app's demo cases and common
  * synonyms, nothing more.
  */
 export class MockLLMProvider implements LLMProvider {
-  async runExtraction(request: SafetyCheckLLMRequest): Promise<SafetyCheckLLMResponse> {
-    const text = [request.presentation, ...Object.values(request.structuredFields ?? {})]
-      .filter(Boolean)
-      .join("\n");
+  async runExtraction(request: SafetyCheckLLMRequest): Promise<Extraction> {
+    return extractFacts(requestText(request), request);
+  }
 
-    const patientFacts = extractFacts(text, request);
-    const potentialConcerns = deriveConcerns(patientFacts, text);
-
-    return { patientFacts, potentialConcerns };
+  async identifyConcerns(request: SafetyCheckLLMRequest, extraction: Extraction): Promise<Concern[]> {
+    return deriveConcerns(extraction, requestText(request));
   }
 }
 

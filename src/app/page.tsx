@@ -2,12 +2,41 @@
 
 import { useState } from "react";
 import { DEMO_CASES } from "@/lib/demo-cases";
+import { DEMO_FIXTURES } from "@/lib/demo-fixtures";
 import type { MockChartRecord } from "@/lib/data-provider";
 import type { StructuredInputFields } from "@/lib/llm/provider";
-import type { SafetyCheckApiResult } from "@/lib/api-types";
+import type { PatientContext } from "@/lib/patient";
+import type { ConcernView } from "@/lib/api-types";
+import type { SafetyCheckStreamEvent, ErrorKind } from "@/lib/stream-events";
 import { ChartPanel } from "@/components/ChartPanel";
 import { ConcernCard } from "@/components/ConcernCard";
 import { PatientFactsSummary } from "@/components/PatientFactsSummary";
+import { ProgressStages, type PipelineStage } from "@/components/ProgressStages";
+
+type Status = "idle" | "loading" | "error" | "done";
+
+interface ResultState {
+  patient: PatientContext;
+  concerns: ConcernView[];
+  usedMockProvider: boolean;
+  fromFixture: boolean;
+}
+
+const EXPANDED_COUNT = 2;
+
+function fieldsEqual(a: StructuredInputFields, b: StructuredInputFields | undefined): boolean {
+  const keys: (keyof StructuredInputFields)[] = [
+    "age",
+    "sex",
+    "cancerDiagnosis",
+    "activeTreatment",
+    "medications",
+    "vitals",
+    "recentLabs",
+    "symptoms",
+  ];
+  return keys.every((k) => (a[k] ?? "") === (b?.[k] ?? ""));
+}
 
 export default function Home() {
   const [selectedCase, setSelectedCase] = useState<MockChartRecord>(DEMO_CASES[0]);
@@ -16,9 +45,18 @@ export default function Home() {
     DEMO_CASES[0].structuredFields ?? {}
   );
   const [showStructured, setShowStructured] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<SafetyCheckApiResult | null>(null);
+
+  const [status, setStatus] = useState<Status>("idle");
+  const [stage, setStage] = useState<PipelineStage>("extracting");
+  const [error, setError] = useState<{ message: string; kind: ErrorKind } | null>(null);
+  const [result, setResult] = useState<ResultState | null>(null);
+
+  // True only when the current inputs exactly match a demo case as loaded —
+  // this is what gates the instant-fixture path. Any edit routes through the
+  // live streaming API instead.
+  const isUneditedDemoCase =
+    presentation === selectedCase.todaysEncounter &&
+    fieldsEqual(structuredFields, selectedCase.structuredFields);
 
   function selectCase(record: MockChartRecord) {
     setSelectedCase(record);
@@ -26,28 +64,94 @@ export default function Home() {
     setStructuredFields(record.structuredFields ?? {});
     setResult(null);
     setError(null);
+    setStatus("idle");
   }
 
   async function runSafetyCheck() {
-    setLoading(true);
+    setStatus("loading");
+    setStage("extracting");
     setError(null);
+    setResult(null);
+
+    const fixture = isUneditedDemoCase ? DEMO_FIXTURES[selectedCase.id] : undefined;
+    if (fixture) {
+      setResult({ ...fixture, fromFixture: true });
+      setStatus("done");
+      return;
+    }
+
     try {
       const res = await fetch("/api/safety-check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ presentation, structuredFields }),
       });
-      const data = await res.json();
-      if (!res.ok) {
+
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => null);
         throw new Error(data?.error ?? "Safety check failed.");
       }
-      setResult(data as SafetyCheckApiResult);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let patient: PatientContext | null = null;
+      let usedMockProvider = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let newlineIndex: number;
+        while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, newlineIndex);
+          buffer = buffer.slice(newlineIndex + 1);
+          if (!line.trim()) continue;
+
+          const event = JSON.parse(line) as SafetyCheckStreamEvent;
+          switch (event.type) {
+            case "facts":
+              patient = event.patient;
+              usedMockProvider = event.usedMockProvider;
+              setStage("matching");
+              break;
+            case "stage":
+              setStage(event.stage);
+              break;
+            case "concerns":
+              if (patient) {
+                setResult({
+                  patient,
+                  concerns: event.concerns,
+                  usedMockProvider,
+                  fromFixture: false,
+                });
+              }
+              break;
+            case "done":
+              setStatus("done");
+              break;
+            case "error":
+              setError({ message: event.message, kind: event.kind });
+              setStatus("error");
+              break;
+          }
+        }
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong.");
-    } finally {
-      setLoading(false);
+      setError({
+        message: e instanceof Error ? e.message : "Something went wrong.",
+        kind: "unknown",
+      });
+      setStatus("error");
     }
   }
+
+  const loading = status === "loading";
+  const concerns = result?.concerns ?? [];
+  const expanded = concerns.slice(0, EXPANDED_COUNT);
+  const collapsed = concerns.slice(EXPANDED_COUNT);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -143,33 +247,44 @@ export default function Home() {
             <button
               onClick={runSafetyCheck}
               disabled={loading || presentation.trim().length === 0}
-              className="mt-3 w-full rounded-md bg-slate-900 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-3 flex w-full flex-col items-center gap-0.5 rounded-md bg-slate-900 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-80"
             >
-              {loading ? "Running safety check…" : "Run Safety Check"}
+              <span>{loading ? "Analyzing…" : "Run Safety Check"}</span>
+              {loading && <span className="text-[11px] font-normal text-slate-300">typically 20–30 seconds</span>}
             </button>
 
             {error && (
-              <p className="mt-2 rounded bg-rose-50 px-2 py-1.5 text-xs text-rose-700">{error}</p>
+              <div className="mt-2 rounded bg-rose-50 px-2.5 py-2 text-xs text-rose-700">
+                <p>{error.message}</p>
+                <button
+                  onClick={runSafetyCheck}
+                  className="mt-1.5 font-semibold text-rose-800 underline underline-offset-2 hover:text-rose-900"
+                >
+                  Retry
+                </button>
+              </div>
             )}
           </div>
         </div>
 
         <div className="space-y-4">
-          {!result && !loading && (
+          {status === "idle" && (
             <div className="flex h-64 flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 text-center text-sm text-slate-400">
               <p>Run a safety check to see potential concerns, applicable</p>
               <p>decision rules, and missing information.</p>
             </div>
           )}
 
-          {loading && (
-            <div className="flex h-64 items-center justify-center rounded-lg border border-slate-200 bg-white text-sm text-slate-400">
-              Analyzing presentation…
-            </div>
-          )}
+          {loading && <ProgressStages stage={stage} />}
 
           {result && (
             <>
+              {result.fromFixture && (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                  Instant result from a precomputed fixture for this demo case. Edit the
+                  presentation or structured fields to run a live check instead.
+                </div>
+              )}
               {result.usedMockProvider && (
                 <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
                   No ANTHROPIC_API_KEY configured — using the deterministic demo extractor
@@ -186,10 +301,23 @@ export default function Home() {
                   Potential high-risk conditions to consider
                 </h2>
                 <div className="space-y-4">
-                  {result.concerns.map((concern, i) => (
+                  {expanded.map((concern, i) => (
                     <ConcernCard key={i} concern={concern} />
                   ))}
                 </div>
+
+                {collapsed.length > 0 && (
+                  <details className="group mt-4">
+                    <summary className="cursor-pointer select-none text-xs font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-600">
+                      Other conditions considered ({collapsed.length})
+                    </summary>
+                    <div className="mt-3 space-y-4">
+                      {collapsed.map((concern, i) => (
+                        <ConcernCard key={i} concern={concern} />
+                      ))}
+                    </div>
+                  </details>
+                )}
               </div>
             </>
           )}

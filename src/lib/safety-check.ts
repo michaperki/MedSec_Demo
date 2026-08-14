@@ -70,15 +70,26 @@ function extractionToPatientContext(
   return patient;
 }
 
-export async function runSafetyCheck(
+/** Stage 1 — extraction only. Fast, small model; no clinical judgment. */
+export async function extractPatientFacts(
   request: SafetyCheckLLMRequest
-): Promise<SafetyCheckResult> {
+): Promise<{ patient: PatientContext; extraction: Extraction; usedMockProvider: boolean }> {
   const provider = getLLMProvider();
-  const llmResponse = await provider.runExtraction(request);
+  const extraction = await provider.runExtraction(request);
+  const patient = extractionToPatientContext(extraction, request.presentation);
+  return { patient, extraction, usedMockProvider: isUsingMockProvider() };
+}
 
-  const patient = extractionToPatientContext(llmResponse.patientFacts, request.presentation);
+/** Stage 2 — candidate concerns + rule suggestions, then deterministic local scoring. */
+export async function identifyAndScoreConcerns(
+  request: SafetyCheckLLMRequest,
+  extraction: Extraction,
+  patient: PatientContext
+): Promise<SafetyConcern[]> {
+  const provider = getLLMProvider();
+  const concerns = await provider.identifyConcerns(request, extraction);
 
-  const concerns: SafetyConcern[] = llmResponse.potentialConcerns.map((concern) => {
+  return concerns.map((concern) => {
     const ruleApplications: RuleApplication[] = concern.suggestedRuleIds
       .map((id) => getRule(id))
       .filter((rule): rule is ClinicalRule => !!rule)
@@ -92,10 +103,13 @@ export async function runSafetyCheck(
       additionalMissingInformation: concern.additionalMissingInformation,
     };
   });
+}
 
-  return {
-    patient,
-    concerns,
-    usedMockProvider: isUsingMockProvider(),
-  };
+/** Full non-streaming pipeline — used by the fixture-generation script. */
+export async function runSafetyCheck(
+  request: SafetyCheckLLMRequest
+): Promise<SafetyCheckResult> {
+  const { patient, extraction, usedMockProvider } = await extractPatientFacts(request);
+  const concerns = await identifyAndScoreConcerns(request, extraction, patient);
+  return { patient, concerns, usedMockProvider };
 }

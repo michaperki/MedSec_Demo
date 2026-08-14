@@ -1,0 +1,1011 @@
+{
+  "case-1-dyspnea": {
+    "patient": {
+      "demographics": {
+        "age": 62,
+        "sex": "male"
+      },
+      "conditions": [],
+      "symptoms": [],
+      "medications": [],
+      "treatments": [],
+      "vitals": {
+        "heartRate": {
+          "value": 112,
+          "source": "explicit"
+        },
+        "systolicBP": {
+          "value": 128,
+          "source": "explicit"
+        },
+        "diastolicBP": {
+          "value": 76,
+          "source": "explicit"
+        },
+        "respiratoryRate": {
+          "value": 20,
+          "source": "explicit"
+        },
+        "oxygenSaturation": {
+          "value": 93,
+          "source": "explicit"
+        }
+      },
+      "labs": {},
+      "history": [],
+      "concepts": {
+        "active_malignancy": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "metasta"
+        },
+        "recent_cytotoxic_chemotherapy": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "chemotherapy"
+        },
+        "fever": {
+          "value": false,
+          "source": "inferred",
+          "evidence": "fever"
+        },
+        "hemoptysis": {
+          "value": false,
+          "source": "inferred",
+          "evidence": "hemoptysis"
+        },
+        "pleuritic_chest_pain": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "pleuritic"
+        },
+        "dyspnea": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "shortness of breath"
+        },
+        "chest_pain": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "chest pain"
+        },
+        "unilateral_leg_swelling": {
+          "value": false,
+          "source": "inferred",
+          "evidence": "leg swelling"
+        }
+      },
+      "rawPresentation": "62-year-old male with metastatic colon cancer currently receiving chemotherapy. Presents with new shortness of breath beginning yesterday and mild pleuritic chest pain. HR 112, BP 128/76, RR 20, oxygen saturation 93%. No known fever. No hemoptysis. No leg swelling reported.",
+      "cancerDiagnosis": {
+        "value": "metastatic colon cancer",
+        "source": "explicit"
+      },
+      "activeTreatment": {
+        "value": "chemotherapy",
+        "source": "explicit"
+      }
+    },
+    "concerns": [
+      {
+        "condition": "Pulmonary embolism",
+        "reason": "Active malignancy plus acute respiratory symptoms — malignancy is a major VTE risk factor and PE can present with isolated dyspnea.",
+        "evidence": [
+          "active malignancy",
+          "dyspnea",
+          "pleuritic chest pain",
+          "heart rate 112"
+        ],
+        "additionalMissingInformation": [
+          "Signs of DVT?",
+          "Prior PE/DVT?",
+          "Is PE judged more likely than an alternative diagnosis?"
+        ],
+        "ruleApplications": [
+          {
+            "id": "wells_pe",
+            "name": "Wells' Criteria for Pulmonary Embolism",
+            "purpose": "Estimates pretest probability of PE to guide the need for D-dimer testing or imaging.",
+            "references": [
+              {
+                "citation": "Wells PS, et al. Derivation of a simple clinical model to categorize patients probability of pulmonary embolism. Thromb Haemost. 2000;83(3):416-420.",
+                "verified": false
+              }
+            ],
+            "criteria": [
+              {
+                "id": "dvt_signs",
+                "label": "Clinical signs and symptoms of DVT",
+                "points": 3,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "pe_most_likely",
+                "label": "PE is the #1 diagnosis, or equally likely",
+                "points": 3,
+                "requiresJudgment": true,
+                "result": {
+                  "status": "requires_judgment"
+                }
+              },
+              {
+                "id": "heart_rate",
+                "label": "Heart rate > 100 bpm",
+                "points": 1.5,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "yes",
+                  "detail": "112 bpm"
+                }
+              },
+              {
+                "id": "immobilization",
+                "label": "Immobilization ≥3 days or surgery in the previous 4 weeks",
+                "points": 1.5,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "prior_vte",
+                "label": "Previous, objectively diagnosed PE or DVT",
+                "points": 1.5,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "hemoptysis",
+                "label": "Hemoptysis",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "no",
+                  "detail": "hemoptysis"
+                }
+              },
+              {
+                "id": "malignancy",
+                "label": "Malignancy (treatment within 6 months, or palliative)",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "yes",
+                  "detail": "metasta"
+                }
+              }
+            ],
+            "knownScore": 2.5,
+            "hasUnknowns": true,
+            "hasJudgmentCriteria": true,
+            "displayScore": "2.5 + missing data + criteria requiring physician judgment",
+            "missingInformation": [
+              "Clinical signs and symptoms of DVT",
+              "PE is the #1 diagnosis, or equally likely",
+              "Immobilization ≥3 days or surgery in the previous 4 weeks",
+              "Previous, objectively diagnosed PE or DVT"
+            ]
+          },
+          {
+            "id": "perc",
+            "name": "PERC Rule (Pulmonary Embolism Rule-out Criteria)",
+            "purpose": "In patients already judged low pretest probability for PE, a fully negative PERC rules out PE without further testing. Not valid if pretest probability is not low.",
+            "references": [
+              {
+                "citation": "Kline JA, et al. Clinical criteria to prevent unnecessary diagnostic testing in emergency department patients with suspected pulmonary embolism. J Thromb Haemost. 2004;2(8):1247-1255.",
+                "verified": false
+              }
+            ],
+            "criteria": [
+              {
+                "id": "age",
+                "label": "Age ≥ 50",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "yes",
+                  "detail": "62 years"
+                }
+              },
+              {
+                "id": "heart_rate",
+                "label": "Heart rate ≥ 100 bpm",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "yes",
+                  "detail": "112 bpm"
+                }
+              },
+              {
+                "id": "spo2",
+                "label": "SpO₂ < 95% on room air",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "yes",
+                  "detail": "93%"
+                }
+              },
+              {
+                "id": "unilateral_leg_swelling",
+                "label": "Unilateral leg swelling",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "no",
+                  "detail": "leg swelling"
+                }
+              },
+              {
+                "id": "hemoptysis",
+                "label": "Hemoptysis",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "no",
+                  "detail": "hemoptysis"
+                }
+              },
+              {
+                "id": "recent_surgery_trauma",
+                "label": "Recent surgery or trauma requiring general anesthesia (≤4 weeks)",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "prior_vte",
+                "label": "Prior PE or DVT",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "hormone_use",
+                "label": "Hormone use (oral contraceptives, HRT, or estrogenic hormones)",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              }
+            ],
+            "knownScore": 3,
+            "hasUnknowns": true,
+            "hasJudgmentCriteria": false,
+            "displayScore": "3 + missing data — cannot calculate final score",
+            "missingInformation": [
+              "Recent surgery or trauma requiring general anesthesia (≤4 weeks)",
+              "Prior PE or DVT",
+              "Hormone use (oral contraceptives, HRT, or estrogenic hormones)"
+            ]
+          }
+        ]
+      },
+      {
+        "condition": "Acute coronary syndrome",
+        "reason": "Chest pain/pressure warrants ACS risk stratification, particularly with cardiovascular risk factors present.",
+        "evidence": [
+          "chest pain or pressure"
+        ],
+        "additionalMissingInformation": [
+          "ECG findings",
+          "Troponin result",
+          "History detail (character, radiation, duration)"
+        ],
+        "ruleApplications": [
+          {
+            "id": "heart_score",
+            "name": "HEART Score for Major Cardiac Events",
+            "purpose": "Risk-stratifies patients with chest pain for 6-week risk of major adverse cardiac events (MACE).",
+            "references": [
+              {
+                "citation": "Six AJ, Backus BE, Kelder JC. Chest pain in the emergency room: value of the HEART score. Neth Heart J. 2008;16(6):191-196.",
+                "verified": false
+              }
+            ],
+            "criteria": [
+              {
+                "id": "history",
+                "label": "History moderately-to-highly suspicious for ACS",
+                "points": 2,
+                "requiresJudgment": true,
+                "result": {
+                  "status": "requires_judgment"
+                }
+              },
+              {
+                "id": "ecg",
+                "label": "ECG shows significant ST deviation (not from LBBB/LVH/digoxin)",
+                "points": 2,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "age",
+                "label": "Age ≥ 65",
+                "points": 2,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "no",
+                  "detail": "62 years"
+                }
+              },
+              {
+                "id": "risk_factors",
+                "label": "≥3 CAD risk factors (HTN, hyperlipidemia, diabetes, obesity, smoking, family history) or known atherosclerotic disease",
+                "points": 2,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "troponin",
+                "label": "Troponin elevated (> 3x normal limit)",
+                "points": 2,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              }
+            ],
+            "knownScore": 0,
+            "hasUnknowns": true,
+            "hasJudgmentCriteria": true,
+            "displayScore": "0 + missing data + criteria requiring physician judgment",
+            "missingInformation": [
+              "History moderately-to-highly suspicious for ACS",
+              "ECG shows significant ST deviation (not from LBBB/LVH/digoxin)",
+              "≥3 CAD risk factors (HTN, hyperlipidemia, diabetes, obesity, smoking, family history) or known atherosclerotic disease",
+              "Troponin elevated (> 3x normal limit)"
+            ]
+          }
+        ]
+      }
+    ],
+    "usedMockProvider": true
+  },
+  "case-2-fever": {
+    "patient": {
+      "demographics": {
+        "age": 57,
+        "sex": "female"
+      },
+      "conditions": [],
+      "symptoms": [],
+      "medications": [],
+      "treatments": [],
+      "vitals": {
+        "heartRate": {
+          "value": 104,
+          "source": "explicit"
+        },
+        "systolicBP": {
+          "value": 108,
+          "source": "explicit"
+        },
+        "diastolicBP": {
+          "value": 68,
+          "source": "explicit"
+        }
+      },
+      "labs": {},
+      "history": [],
+      "concepts": {
+        "recent_cytotoxic_chemotherapy": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "chemotherapy"
+        },
+        "fever": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "fever"
+        },
+        "rigors": {
+          "value": false,
+          "source": "inferred",
+          "evidence": "rigors"
+        },
+        "diarrhea": {
+          "value": false,
+          "source": "inferred",
+          "evidence": "diarrhea"
+        },
+        "outpatient_at_fever_onset": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "at home"
+        }
+      },
+      "rawPresentation": "57-year-old female with AML, 12 days post-induction chemotherapy (cytarabine + daunorubicin), calls with new fever to 38.6°C at home this afternoon. Feels generally unwell but no localizing symptoms — no cough, no dysuria, no diarrhea. No rigors reported. She is currently at home, not yet evaluated in person. HR 104, BP 108/68.",
+      "cancerDiagnosis": {
+        "value": "Acute myeloid leukemia",
+        "source": "explicit"
+      },
+      "activeTreatment": {
+        "value": "chemotherapy",
+        "source": "explicit"
+      }
+    },
+    "concerns": [
+      {
+        "condition": "Neutropenic fever / serious infection",
+        "reason": "Fever after recent cytotoxic chemotherapy raises concern for neutropenic sepsis, a time-critical diagnosis regardless of how well the patient otherwise looks.",
+        "evidence": [
+          "fever",
+          "recent cytotoxic chemotherapy"
+        ],
+        "additionalMissingInformation": [
+          "ANC (absolute neutrophil count) — required to confirm neutropenia"
+        ],
+        "ruleApplications": [
+          {
+            "id": "qsofa",
+            "name": "qSOFA (Quick SOFA)",
+            "purpose": "Bedside prompt to identify patients with suspected infection at higher risk of poor outcome outside the ICU. Not a diagnostic test for sepsis.",
+            "references": [
+              {
+                "citation": "Singer M, et al. The Third International Consensus Definitions for Sepsis and Septic Shock (Sepsis-3). JAMA. 2016;315(8):801-810.",
+                "verified": false
+              }
+            ],
+            "criteria": [
+              {
+                "id": "resp_rate",
+                "label": "Respiratory rate ≥ 22/min",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "altered_mentation",
+                "label": "Altered mentation (GCS < 15)",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "sbp",
+                "label": "Systolic BP ≤ 100 mmHg",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "no",
+                  "detail": "108 mmHg"
+                }
+              }
+            ],
+            "knownScore": 0,
+            "hasUnknowns": true,
+            "hasJudgmentCriteria": false,
+            "displayScore": "0 + missing data — cannot calculate final score",
+            "missingInformation": [
+              "Respiratory rate ≥ 22/min",
+              "Altered mentation (GCS < 15)"
+            ]
+          },
+          {
+            "id": "sirs",
+            "name": "SIRS Criteria",
+            "purpose": "Historical criteria for systemic inflammatory response; still widely used as an early flag for possible sepsis, especially relevant given the differential of neutropenic fever.",
+            "references": [
+              {
+                "citation": "Bone RC, et al. Definitions for sepsis and organ failure. Chest. 1992;101(6):1644-1655.",
+                "verified": false
+              }
+            ],
+            "criteria": [
+              {
+                "id": "temperature",
+                "label": "Temperature > 38°C or < 36°C",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "heart_rate",
+                "label": "Heart rate > 90 bpm",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "yes",
+                  "detail": "104 bpm"
+                }
+              },
+              {
+                "id": "resp_rate",
+                "label": "Respiratory rate > 20/min",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "wbc",
+                "label": "WBC > 12 or < 4 ×10⁹/L",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              }
+            ],
+            "knownScore": 1,
+            "hasUnknowns": true,
+            "hasJudgmentCriteria": false,
+            "displayScore": "1 + missing data — cannot calculate final score",
+            "missingInformation": [
+              "Temperature > 38°C or < 36°C",
+              "Respiratory rate > 20/min",
+              "WBC > 12 or < 4 ×10⁹/L"
+            ]
+          },
+          {
+            "id": "mascc",
+            "name": "MASCC Risk Index (Febrile Neutropenia)",
+            "purpose": "Identifies febrile neutropenic patients at low risk of medical complications who may be candidates for less intensive management. Higher score = lower risk.",
+            "references": [
+              {
+                "citation": "Klastersky J, et al. The Multinational Association for Supportive Care in Cancer risk index. J Clin Oncol. 2000;18(16):3038-3051.",
+                "verified": false
+              }
+            ],
+            "criteria": [
+              {
+                "id": "symptom_burden",
+                "label": "No or mild symptoms",
+                "points": 5,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "no_hypotension",
+                "label": "No hypotension (SBP ≥ 90 mmHg)",
+                "points": 5,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "no_copd",
+                "label": "No chronic obstructive pulmonary disease",
+                "points": 4,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "no_prior_fungal",
+                "label": "Solid tumor, or hematologic malignancy with no previous fungal infection",
+                "points": 4,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "no_dehydration",
+                "label": "No dehydration requiring IV fluids",
+                "points": 3,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "outpatient_status",
+                "label": "Outpatient status at onset of fever",
+                "points": 3,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "yes",
+                  "detail": "at home"
+                }
+              },
+              {
+                "id": "age",
+                "label": "Age < 60",
+                "points": 2,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "yes",
+                  "detail": "57 years"
+                }
+              }
+            ],
+            "knownScore": 5,
+            "hasUnknowns": true,
+            "hasJudgmentCriteria": false,
+            "displayScore": "5 + missing data — cannot calculate final score",
+            "missingInformation": [
+              "No or mild symptoms",
+              "No hypotension (SBP ≥ 90 mmHg)",
+              "No chronic obstructive pulmonary disease",
+              "Solid tumor, or hematologic malignancy with no previous fungal infection",
+              "No dehydration requiring IV fluids"
+            ]
+          },
+          {
+            "id": "cisne",
+            "name": "CISNE (Clinical Index of Stable Febrile Neutropenia)",
+            "purpose": "For apparently stable outpatients with solid tumors and chemotherapy-induced fever/neutropenia — identifies those still at risk of serious complications.",
+            "references": [
+              {
+                "citation": "Carmona-Bayonas A, et al. Prediction of serious complications in patients with seemingly stable febrile neutropenia. J Clin Oncol. 2015;33(5):465-471.",
+                "verified": false
+              }
+            ],
+            "criteria": [
+              {
+                "id": "ecog_ps",
+                "label": "ECOG performance status ≥ 2",
+                "points": 2,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "copd",
+                "label": "COPD",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "cardiovascular_disease",
+                "label": "Chronic cardiovascular disease",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "mucositis",
+                "label": "NCI mucositis grade ≥ 2",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "monocytes",
+                "label": "Monocytes < 200/mm³",
+                "points": 1,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "stress_hyperglycemia",
+                "label": "Stress-induced hyperglycemia",
+                "points": 2,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              }
+            ],
+            "knownScore": 0,
+            "hasUnknowns": true,
+            "hasJudgmentCriteria": false,
+            "displayScore": "0 + missing data — cannot calculate final score",
+            "missingInformation": [
+              "ECOG performance status ≥ 2",
+              "COPD",
+              "Chronic cardiovascular disease",
+              "NCI mucositis grade ≥ 2",
+              "Monocytes < 200/mm³",
+              "Stress-induced hyperglycemia"
+            ]
+          }
+        ]
+      }
+    ],
+    "usedMockProvider": true
+  },
+  "case-3-back-pain": {
+    "patient": {
+      "demographics": {
+        "age": 68,
+        "sex": "male"
+      },
+      "conditions": [],
+      "symptoms": [],
+      "medications": [],
+      "treatments": [],
+      "vitals": {},
+      "labs": {},
+      "history": [],
+      "concepts": {
+        "active_malignancy": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "metasta"
+        },
+        "fever": {
+          "value": false,
+          "source": "inferred",
+          "evidence": "fever"
+        },
+        "back_pain": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "back pain"
+        },
+        "saddle_anesthesia": {
+          "value": false,
+          "source": "inferred",
+          "evidence": "saddle numbness"
+        }
+      },
+      "rawPresentation": "68-year-old male with metastatic prostate cancer and known lumbar spine metastases presents with new, severe back pain over the past 3 days, distinctly worse than his usual chronic pain, and new bilateral lower-extremity weakness noticed this morning when he had trouble standing. He also reports some difficulty initiating urination since yesterday. No saddle numbness reported yet — not specifically asked. No fever.",
+      "cancerDiagnosis": {
+        "value": "metastatic prostate cancer",
+        "source": "explicit"
+      }
+    },
+    "concerns": [
+      {
+        "condition": "Spinal cord compression",
+        "reason": "New back pain with lower-extremity weakness in a patient with known malignancy is a neuro-oncologic emergency until excluded — delayed diagnosis risks permanent paralysis.",
+        "evidence": [
+          "new back pain"
+        ],
+        "additionalMissingInformation": [
+          "Bladder or bowel dysfunction?",
+          "Saddle anesthesia?",
+          "Focal neurologic deficits on exam?",
+          "Is urgent MRI spine available?"
+        ],
+        "ruleApplications": []
+      }
+    ],
+    "usedMockProvider": true
+  },
+  "case-4-chest-pain": {
+    "patient": {
+      "demographics": {
+        "age": 71,
+        "sex": "female"
+      },
+      "conditions": [],
+      "symptoms": [],
+      "medications": [],
+      "treatments": [],
+      "vitals": {
+        "heartRate": {
+          "value": 88,
+          "source": "explicit"
+        },
+        "systolicBP": {
+          "value": 152,
+          "source": "explicit"
+        },
+        "diastolicBP": {
+          "value": 88,
+          "source": "explicit"
+        }
+      },
+      "labs": {},
+      "history": [],
+      "concepts": {
+        "active_malignancy": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "cancer"
+        },
+        "dyspnea": {
+          "value": false,
+          "source": "inferred",
+          "evidence": "shortness of breath"
+        },
+        "chest_pain": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "chest pressure"
+        },
+        "smoking": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "pack-year"
+        },
+        "hypertension": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "hypertension"
+        },
+        "hyperlipidemia": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "hyperlipidemia"
+        }
+      },
+      "rawPresentation": "71-year-old female with history of breast cancer on adjuvant anastrozole, hypertension, hyperlipidemia, and a 30 pack-year smoking history (quit 10 years ago), presents with chest pressure that started 2 hours ago while at rest, non-exertional, without clear radiation. No shortness of breath. HR 88, BP 152/88. ECG and troponin have been ordered but are not yet resulted.",
+      "cancerDiagnosis": {
+        "value": "of breast cancer",
+        "source": "explicit"
+      }
+    },
+    "concerns": [
+      {
+        "condition": "Acute coronary syndrome",
+        "reason": "Chest pain/pressure warrants ACS risk stratification, particularly with cardiovascular risk factors present.",
+        "evidence": [
+          "chest pain or pressure"
+        ],
+        "additionalMissingInformation": [
+          "ECG findings",
+          "Troponin result",
+          "History detail (character, radiation, duration)"
+        ],
+        "ruleApplications": [
+          {
+            "id": "heart_score",
+            "name": "HEART Score for Major Cardiac Events",
+            "purpose": "Risk-stratifies patients with chest pain for 6-week risk of major adverse cardiac events (MACE).",
+            "references": [
+              {
+                "citation": "Six AJ, Backus BE, Kelder JC. Chest pain in the emergency room: value of the HEART score. Neth Heart J. 2008;16(6):191-196.",
+                "verified": false
+              }
+            ],
+            "criteria": [
+              {
+                "id": "history",
+                "label": "History moderately-to-highly suspicious for ACS",
+                "points": 2,
+                "requiresJudgment": true,
+                "result": {
+                  "status": "requires_judgment"
+                }
+              },
+              {
+                "id": "ecg",
+                "label": "ECG shows significant ST deviation (not from LBBB/LVH/digoxin)",
+                "points": 2,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              },
+              {
+                "id": "age",
+                "label": "Age ≥ 65",
+                "points": 2,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "yes",
+                  "detail": "71 years"
+                }
+              },
+              {
+                "id": "risk_factors",
+                "label": "≥3 CAD risk factors (HTN, hyperlipidemia, diabetes, obesity, smoking, family history) or known atherosclerotic disease",
+                "points": 2,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "yes",
+                  "detail": "3 risk factors"
+                }
+              },
+              {
+                "id": "troponin",
+                "label": "Troponin elevated (> 3x normal limit)",
+                "points": 2,
+                "requiresJudgment": false,
+                "result": {
+                  "status": "unknown"
+                }
+              }
+            ],
+            "knownScore": 4,
+            "hasUnknowns": true,
+            "hasJudgmentCriteria": true,
+            "displayScore": "4 + missing data + criteria requiring physician judgment",
+            "missingInformation": [
+              "History moderately-to-highly suspicious for ACS",
+              "ECG shows significant ST deviation (not from LBBB/LVH/digoxin)",
+              "Troponin elevated (> 3x normal limit)"
+            ]
+          }
+        ]
+      }
+    ],
+    "usedMockProvider": true
+  },
+  "case-5-immunotherapy": {
+    "patient": {
+      "demographics": {
+        "age": 54,
+        "sex": "male"
+      },
+      "conditions": [],
+      "symptoms": [],
+      "medications": [],
+      "treatments": [],
+      "vitals": {},
+      "labs": {},
+      "history": [],
+      "concepts": {
+        "active_malignancy": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "metasta"
+        },
+        "checkpoint_inhibitor_therapy": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "nivolumab"
+        },
+        "fever": {
+          "value": false,
+          "source": "inferred",
+          "evidence": "fever"
+        },
+        "diarrhea": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "diarrhea"
+        },
+        "abdominal_pain": {
+          "value": true,
+          "source": "inferred",
+          "evidence": "abdominal pain"
+        }
+      },
+      "rawPresentation": "54-year-old male with metastatic melanoma on combination nivolumab and ipilimumab (cycle 3, 10 days ago) reports 6-7 episodes of watery diarrhea daily for the past 3 days, up from his normal 1 per day, with new mild diffuse abdominal pain. He has been taking over-the-counter loperamide without improvement. No blood in stool reported. No fever. He has not yet been evaluated for possible immune-mediated colitis.",
+      "activeTreatment": {
+        "value": "nivolumab",
+        "source": "explicit"
+      }
+    },
+    "concerns": [
+      {
+        "condition": "Immune-related adverse event (colitis)",
+        "reason": "New diarrhea in a patient on checkpoint inhibitor therapy raises concern for immune-mediated colitis, which can progress rapidly if untreated.",
+        "evidence": [
+          "checkpoint inhibitor therapy",
+          "diarrhea"
+        ],
+        "additionalMissingInformation": [
+          "Number of stools above baseline per day (CTCAE grading)?",
+          "Blood in stool?",
+          "Abdominal pain or distension?",
+          "Fever?"
+        ],
+        "ruleApplications": []
+      }
+    ],
+    "usedMockProvider": true
+  }
+}

@@ -52,17 +52,16 @@ export const ExtractionSchema = z.object({
 
 export const ConcernSchema = z.object({
   condition: z.string(),
-  reason: z.string(),
-  evidence: z.array(z.string()).default([]),
+  reason: z.string().max(240),
+  evidence: z.array(z.string().max(60)).max(6).default([]),
   suggestedRuleIds: z.array(z.string()).default([]),
-  additionalMissingInformation: z.array(z.string()).default([]),
+  additionalMissingInformation: z.array(z.string().max(80)).max(5).default([]),
 });
 
-export const SafetyCheckLLMResponseSchema = z.object({
-  patientFacts: ExtractionSchema,
+export const ConcernsResponseSchema = z.object({
   potentialConcerns: z.array(ConcernSchema).default([]),
 });
 
 export type Extraction = z.infer<typeof ExtractionSchema>;
 export type Concern = z.infer<typeof ConcernSchema>;
-export type SafetyCheckLLMResponse = z.infer<typeof SafetyCheckLLMResponseSchema>;
+export type ConcernsResponse = z.infer<typeof ConcernsResponseSchema>;

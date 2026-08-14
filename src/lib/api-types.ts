@@ -1,4 +1,3 @@
-import type { PatientContext } from "./patient";
 import type { CriterionResult, Reference, ScoreBand } from "./rules";
 import type { RuleApplication, SafetyCheckResult } from "./safety-check";
 
@@ -33,12 +32,6 @@ export interface ConcernView {
   additionalMissingInformation: string[];
 }
 
-export interface SafetyCheckApiResult {
-  patient: PatientContext;
-  concerns: ConcernView[];
-  usedMockProvider: boolean;
-}
-
 function toRuleView(app: RuleApplication): RuleView {
   const { rule, evaluation } = app;
   return {
@@ -62,16 +55,12 @@ function toRuleView(app: RuleApplication): RuleView {
   };
 }
 
-export function toApiResult(result: SafetyCheckResult): SafetyCheckApiResult {
+export function toConcernView(concern: SafetyCheckResult["concerns"][number]): ConcernView {
   return {
-    patient: result.patient,
-    usedMockProvider: result.usedMockProvider,
-    concerns: result.concerns.map((concern) => ({
-      condition: concern.condition,
-      reason: concern.reason,
-      evidence: concern.evidence,
-      additionalMissingInformation: concern.additionalMissingInformation,
-      ruleApplications: concern.ruleApplications.map(toRuleView),
-    })),
+    condition: concern.condition,
+    reason: concern.reason,
+    evidence: concern.evidence,
+    additionalMissingInformation: concern.additionalMissingInformation,
+    ruleApplications: concern.ruleApplications.map(toRuleView),
   };
 }
