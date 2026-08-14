@@ -2,20 +2,19 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { CONCEPT_IDS, LAB_NAMES } from "../concepts";
 import { RULE_REGISTRY } from "../rules";
-import {
-  ExtractionSchema,
-  ConcernsResponseSchema,
-  type Extraction,
-  type Concern,
-} from "./schema";
+import { ExtractionSchema, ConcernSchema, ConcernsResponseSchema, type Concern } from "./schema";
 import {
   EXTRACTION_SYSTEM_PROMPT,
   CONCERN_SYSTEM_PROMPT,
   buildExtractionPrompt,
   buildConcernPrompt,
+  type ConcernStreamChunk,
+  type ExtractionResult,
   type LLMProvider,
   type SafetyCheckLLMRequest,
+  type StageTiming,
 } from "./provider";
+import { createJsonArrayElementParser } from "./json-stream-parser";
 
 // Extraction is small, well-bounded output — a fast/cheap model is plenty.
 // Candidate identification needs broader clinical judgment, so it keeps the
@@ -45,24 +44,36 @@ export class AnthropicProvider implements LLMProvider {
     this.client = new Anthropic(apiKey ? { apiKey } : {});
   }
 
-  async runExtraction(request: SafetyCheckLLMRequest): Promise<Extraction> {
+  async runExtraction(request: SafetyCheckLLMRequest, signal?: AbortSignal): Promise<ExtractionResult> {
     const userPrompt = buildExtractionPrompt(request, CONCEPT_IDS, LAB_NAMES);
+    const start = performance.now();
 
-    const response = await this.client.messages.parse({
-      model: EXTRACTION_MODEL,
-      max_tokens: 2000,
-      system: [
-        {
-          type: "text",
-          text: EXTRACTION_SYSTEM_PROMPT,
-          cache_control: { type: "ephemeral" },
+    const response = await this.client.messages.parse(
+      {
+        model: EXTRACTION_MODEL,
+        max_tokens: 1500,
+        system: [
+          {
+            type: "text",
+            text: EXTRACTION_SYSTEM_PROMPT,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        messages: [{ role: "user", content: userPrompt }],
+        output_config: {
+          format: zodOutputFormat(ExtractionSchema),
         },
-      ],
-      messages: [{ role: "user", content: userPrompt }],
-      output_config: {
-        format: zodOutputFormat(ExtractionSchema),
       },
-    });
+      { signal }
+    );
+
+    const timing: StageTiming = {
+      stage: "extraction",
+      model: EXTRACTION_MODEL,
+      durationMs: performance.now() - start,
+      inputTokens: response.usage?.input_tokens,
+      outputTokens: response.usage?.output_tokens,
+    };
 
     const refusal = refusalError(response);
     if (refusal) throw refusal;
@@ -75,47 +86,96 @@ export class AnthropicProvider implements LLMProvider {
     if (!result.success) {
       throw new Error("Extraction response failed schema validation: " + result.error.message);
     }
-    return result.data;
+    return { extraction: result.data, timing };
   }
 
-  async identifyConcerns(
+  async *streamConcerns(
     request: SafetyCheckLLMRequest,
-    extraction: Extraction
-  ): Promise<Concern[]> {
+    signal?: AbortSignal
+  ): AsyncGenerator<ConcernStreamChunk> {
     const userPrompt = buildConcernPrompt(
       request,
-      extraction,
       RULE_REGISTRY.map((r) => ({ id: r.id, name: r.name, purpose: r.purpose }))
     );
+    const start = performance.now();
 
-    const response = await this.client.messages.parse({
-      model: CONCERNS_MODEL,
-      max_tokens: 3000,
-      system: [
-        { type: "text", text: CONCERN_SYSTEM_PROMPT },
-        {
-          type: "text",
-          text: RULE_REGISTRY_BLOCK,
-          cache_control: { type: "ephemeral" },
+    // Deliberately the raw streaming API (create + stream:true), not the
+    // `.stream()` convenience helper: with output_config.format set, that
+    // helper eagerly re-parses the accumulated text as JSON on every delta
+    // to populate `parsed_output`, and throws on the (expected, constant)
+    // mid-object incomplete-JSON state instead of waiting for the message to
+    // finish. We do our own incremental parsing (json-stream-parser) and
+    // read usage/stop_reason off the raw message_start/message_delta events.
+    const stream = await this.client.messages.create(
+      {
+        model: CONCERNS_MODEL,
+        // Measured against the live API: a well-populated response (6+
+        // concerns, each with rule suggestions and missing-info items) runs
+        // ~1200-1900 output tokens; one run hit 2500/2500 (truncated,
+        // silently dropping whatever concern was mid-flight when the cap
+        // hit). 4000 leaves real headroom instead of a near-miss margin.
+        max_tokens: 4000,
+        stream: true,
+        system: [
+          { type: "text", text: CONCERN_SYSTEM_PROMPT },
+          {
+            type: "text",
+            text: RULE_REGISTRY_BLOCK,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        messages: [{ role: "user", content: userPrompt }],
+        output_config: {
+          format: zodOutputFormat(ConcernsResponseSchema),
         },
-      ],
-      messages: [{ role: "user", content: userPrompt }],
-      output_config: {
-        format: zodOutputFormat(ConcernsResponseSchema),
       },
+      { signal }
+    );
+
+    const parser = createJsonArrayElementParser<Concern>((value) => {
+      const result = ConcernSchema.safeParse(value);
+      return result.success ? result.data : undefined;
     });
 
-    const refusal = refusalError(response);
+    let inputTokens: number | undefined;
+    let outputTokens: number | undefined;
+    let stopReason: string | null = null;
+
+    for await (const event of stream) {
+      if (event.type === "message_start") {
+        inputTokens = event.message.usage.input_tokens;
+        outputTokens = event.message.usage.output_tokens;
+      } else if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+        for (const concern of parser.feed(event.delta.text)) {
+          yield { type: "concern", concern };
+        }
+      } else if (event.type === "message_delta") {
+        outputTokens = event.usage.output_tokens ?? outputTokens;
+        stopReason = event.delta.stop_reason ?? stopReason;
+      }
+    }
+
+    if (stopReason === "max_tokens") {
+      // The response was truncated mid-generation — whatever concern object
+      // was still open when the cap hit never closed, so it was silently
+      // dropped by the incremental parser rather than emitted. Surfacing
+      // this server-side is the only way to notice it happened.
+      console.warn(
+        `[anthropic-provider] concerns stage hit max_tokens (${outputTokens} tokens) — output was truncated, at least one concern may be missing.`
+      );
+    }
+
+    const timing: StageTiming = {
+      stage: "concerns",
+      model: CONCERNS_MODEL,
+      durationMs: performance.now() - start,
+      inputTokens,
+      outputTokens,
+    };
+
+    const refusal = refusalError({ stop_reason: stopReason });
     if (refusal) throw refusal;
 
-    if (!response.parsed_output) {
-      throw new Error("Model response did not include parsed structured output.");
-    }
-
-    const result = ConcernsResponseSchema.safeParse(response.parsed_output);
-    if (!result.success) {
-      throw new Error("Concerns response failed schema validation: " + result.error.message);
-    }
-    return result.data.potentialConcerns;
+    yield { type: "timing", timing };
   }
 }

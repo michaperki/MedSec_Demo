@@ -1,7 +1,7 @@
 import { emptyPatientContext, type PatientContext } from "./patient";
 import { evaluateRule, getRule, type ClinicalRule, type RuleEvaluation } from "./rules";
 import { getLLMProvider, isUsingMockProvider } from "./llm";
-import type { Extraction, SafetyCheckLLMRequest } from "./llm";
+import type { Concern, Extraction, SafetyCheckLLMRequest, StageTiming } from "./llm";
 
 export interface RuleApplication {
   rule: ClinicalRule;
@@ -22,6 +22,22 @@ export interface SafetyCheckResult {
   usedMockProvider: boolean;
 }
 
+/**
+ * Domain-level pipeline events — what actually happened, independent of how
+ * it's transported. The HTTP route layer maps these to wire NDJSON events;
+ * the fixture script drains them into a plain `SafetyCheckResult`.
+ *
+ * Extraction and concern identification run concurrently (see
+ * runSafetyCheckPipeline below), so a `concern` can arrive before `facts` or
+ * vice versa — `concernRules` always follows its `concern` once patient
+ * facts are available, whichever order that ends up being.
+ */
+export type SafetyCheckPipelineEvent =
+  | { type: "facts"; patient: PatientContext; usedMockProvider: boolean }
+  | { type: "concern"; index: number; concern: Concern }
+  | { type: "concernRules"; index: number; ruleApplications: RuleApplication[] }
+  | { type: "timing"; timing: StageTiming };
+
 function extractionToPatientContext(
   extraction: Extraction,
   rawPresentation: string
@@ -34,11 +50,6 @@ function extractionToPatientContext(
   };
   patient.cancerDiagnosis = extraction.cancerDiagnosis;
   patient.activeTreatment = extraction.activeTreatment;
-  patient.symptoms = extraction.symptoms;
-  patient.conditions = extraction.conditions;
-  patient.medications = extraction.medications;
-  patient.treatments = extraction.treatments;
-  patient.history = extraction.history;
 
   patient.vitals = {
     heartRate: extraction.vitals.heartRate,
@@ -50,12 +61,7 @@ function extractionToPatientContext(
   };
 
   for (const lab of extraction.labs) {
-    patient.labs[lab.name] = {
-      value: lab.value,
-      source: lab.source,
-      evidence: lab.evidence,
-      confidence: lab.confidence,
-    };
+    patient.labs[lab.name] = { value: lab.value, source: lab.source };
   }
 
   for (const concept of extraction.concepts) {
@@ -63,53 +69,145 @@ function extractionToPatientContext(
       value: concept.value,
       source: concept.source,
       evidence: concept.evidence,
-      confidence: concept.confidence,
     };
   }
 
   return patient;
 }
 
-/** Stage 1 — extraction only. Fast, small model; no clinical judgment. */
-export async function extractPatientFacts(
-  request: SafetyCheckLLMRequest
-): Promise<{ patient: PatientContext; extraction: Extraction; usedMockProvider: boolean }> {
-  const provider = getLLMProvider();
-  const extraction = await provider.runExtraction(request);
-  const patient = extractionToPatientContext(extraction, request.presentation);
-  return { patient, extraction, usedMockProvider: isUsingMockProvider() };
+function computeRuleApplications(concern: Concern, patient: PatientContext): RuleApplication[] {
+  return concern.suggestedRuleIds
+    .map((id) => getRule(id))
+    .filter((rule): rule is ClinicalRule => !!rule)
+    .map((rule) => ({ rule, evaluation: evaluateRule(rule, patient) }));
 }
 
-/** Stage 2 — candidate concerns + rule suggestions, then deterministic local scoring. */
-export async function identifyAndScoreConcerns(
+/**
+ * Runs extraction and concern identification concurrently and yields domain
+ * events in arrival order as each piece completes. The two model calls
+ * don't depend on each other, so total latency tracks the slower of the
+ * two rather than their sum.
+ *
+ * A concern's rule tables need patient facts to score against, so whichever
+ * of {facts, concern} arrives second triggers the `concernRules` event for
+ * any concern still waiting on it.
+ */
+export async function* runSafetyCheckPipeline(
   request: SafetyCheckLLMRequest,
-  extraction: Extraction,
-  patient: PatientContext
-): Promise<SafetyConcern[]> {
+  signal?: AbortSignal
+): AsyncGenerator<SafetyCheckPipelineEvent> {
   const provider = getLLMProvider();
-  const concerns = await provider.identifyConcerns(request, extraction);
+  const usedMockProvider = isUsingMockProvider();
 
-  return concerns.map((concern) => {
-    const ruleApplications: RuleApplication[] = concern.suggestedRuleIds
-      .map((id) => getRule(id))
-      .filter((rule): rule is ClinicalRule => !!rule)
-      .map((rule) => ({ rule, evaluation: evaluateRule(rule, patient) }));
+  const queue: SafetyCheckPipelineEvent[] = [];
+  let wake: (() => void) | null = null;
+  let settled = false;
+  let failure: unknown = null;
 
-    return {
-      condition: concern.condition,
-      reason: concern.reason,
-      evidence: concern.evidence,
-      ruleApplications,
-      additionalMissingInformation: concern.additionalMissingInformation,
-    };
-  });
+  function push(event: SafetyCheckPipelineEvent) {
+    queue.push(event);
+    wake?.();
+    wake = null;
+  }
+
+  let patient: PatientContext | undefined;
+  const rulesPending = new Map<number, Concern>();
+
+  async function runExtractionWorker() {
+    const { extraction, timing } = await provider.runExtraction(request, signal);
+    push({ type: "timing", timing });
+
+    patient = extractionToPatientContext(extraction, request.presentation);
+    push({ type: "facts", patient, usedMockProvider });
+
+    for (const [index, concern] of rulesPending) {
+      push({ type: "concernRules", index, ruleApplications: computeRuleApplications(concern, patient) });
+    }
+    rulesPending.clear();
+  }
+
+  async function runConcernsWorker() {
+    let index = 0;
+    for await (const chunk of provider.streamConcerns(request, signal)) {
+      if (chunk.type === "timing") {
+        push({ type: "timing", timing: chunk.timing });
+        continue;
+      }
+
+      const i = index++;
+      push({ type: "concern", index: i, concern: chunk.concern });
+
+      if (patient) {
+        push({ type: "concernRules", index: i, ruleApplications: computeRuleApplications(chunk.concern, patient) });
+      } else {
+        rulesPending.set(i, chunk.concern);
+      }
+    }
+  }
+
+  Promise.all([runExtractionWorker(), runConcernsWorker()])
+    .then(() => {
+      settled = true;
+      wake?.();
+      wake = null;
+    })
+    .catch((err) => {
+      failure = err;
+      settled = true;
+      wake?.();
+      wake = null;
+    });
+
+  while (true) {
+    while (queue.length > 0) {
+      yield queue.shift()!;
+    }
+    if (failure) throw failure;
+    if (settled) return;
+    await new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+  }
 }
 
 /** Full non-streaming pipeline — used by the fixture-generation script. */
-export async function runSafetyCheck(
-  request: SafetyCheckLLMRequest
-): Promise<SafetyCheckResult> {
-  const { patient, extraction, usedMockProvider } = await extractPatientFacts(request);
-  const concerns = await identifyAndScoreConcerns(request, extraction, patient);
-  return { patient, concerns, usedMockProvider };
+export async function runSafetyCheck(request: SafetyCheckLLMRequest): Promise<SafetyCheckResult> {
+  let patient: PatientContext | undefined;
+  let usedMockProvider = false;
+  const concerns = new Map<number, SafetyConcern>();
+
+  for await (const event of runSafetyCheckPipeline(request)) {
+    switch (event.type) {
+      case "facts":
+        patient = event.patient;
+        usedMockProvider = event.usedMockProvider;
+        break;
+      case "concern":
+        concerns.set(event.index, {
+          condition: event.concern.condition,
+          reason: event.concern.reason,
+          evidence: event.concern.evidence,
+          additionalMissingInformation: event.concern.additionalMissingInformation,
+          ruleApplications: [],
+        });
+        break;
+      case "concernRules": {
+        const c = concerns.get(event.index);
+        if (c) c.ruleApplications = event.ruleApplications;
+        break;
+      }
+      case "timing":
+        break;
+    }
+  }
+
+  if (!patient) {
+    throw new Error("Safety check pipeline finished without an extraction result.");
+  }
+
+  return {
+    patient,
+    usedMockProvider,
+    concerns: [...concerns.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c),
+  };
 }

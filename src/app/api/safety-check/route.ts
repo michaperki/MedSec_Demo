@@ -1,14 +1,21 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import Anthropic from "@anthropic-ai/sdk";
-import { extractPatientFacts, identifyAndScoreConcerns } from "@/lib/safety-check";
-import { toConcernView } from "@/lib/api-types";
+import { runSafetyCheckPipeline } from "@/lib/safety-check";
+import { toConcernShellView, toRuleViews } from "@/lib/api-types";
 import { encodeEvent, type ErrorKind } from "@/lib/stream-events";
 
-// A live run (extraction + concern identification, both real model calls)
-// typically takes 15-30s. Give real headroom above that so a slow request
-// never gets killed mid-flight.
-export const maxDuration = 60;
+// 300s is the highest maxDuration every Vercel plan (including Hobby)
+// accepts with Fluid Compute — see the DEADLINE_MS race below for the
+// actual ceiling we hold ourselves to, well inside this.
+export const maxDuration = 300;
+
+// The pipeline races against this and always emits a terminal `error` event
+// and closes the stream if it's exceeded — the client must never be left
+// with an open connection and no terminal event. Comfortably below
+// maxDuration so we always get to respond gracefully instead of the
+// platform killing the function out from under us.
+const DEADLINE_MS = 50_000;
 
 const RequestSchema = z.object({
   presentation: z.string().min(1, "Presentation text is required."),
@@ -33,7 +40,7 @@ function classifyError(err: unknown): { message: string; kind: ErrorKind } {
       kind: "auth",
     };
   }
-  if (err instanceof Anthropic.APIConnectionTimeoutError) {
+  if (err instanceof Anthropic.APIConnectionTimeoutError || err instanceof Anthropic.APIUserAbortError) {
     return { message: "The request timed out. Try again — it usually goes through on retry.", kind: "timeout" };
   }
   if (err instanceof Anthropic.RateLimitError || err instanceof Anthropic.InternalServerError) {
@@ -68,22 +75,93 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      const startedAt = Date.now();
+      const abortController = new AbortController();
+      let closed = false;
+
+      function sendTerminal(event: { type: "done" } | { type: "error"; message: string; kind: ErrorKind }) {
+        if (closed) return;
+        closed = true;
+        controller.enqueue(encodeEvent(event));
+        controller.close();
+      }
+
+      const pipeline = runSafetyCheckPipeline(request, abortController.signal);
+      // Held across loop iterations so a timeout tick never issues a second
+      // concurrent .next() call while the first is still outstanding.
+      let pendingNext = pipeline.next();
+
       try {
-        const { patient, extraction, usedMockProvider } = await extractPatientFacts(request);
-        controller.enqueue(encodeEvent({ type: "facts", patient, usedMockProvider }));
+        while (true) {
+          const remaining = DEADLINE_MS - (Date.now() - startedAt);
+          if (remaining <= 0) {
+            abortController.abort();
+            console.error(`Safety check exceeded ${DEADLINE_MS}ms deadline; aborting.`);
+            sendTerminal({
+              type: "error",
+              message: "This is taking longer than expected and was stopped. Try again.",
+              kind: "timeout",
+            });
+            return;
+          }
 
-        controller.enqueue(encodeEvent({ type: "stage", stage: "assembling" }));
-        const concerns = await identifyAndScoreConcerns(request, extraction, patient);
+          const timeout = new Promise<"timeout">((resolve) => {
+            setTimeout(() => resolve("timeout"), remaining);
+          });
+          const result = await Promise.race([pendingNext, timeout]);
 
-        controller.enqueue(
-          encodeEvent({ type: "concerns", concerns: concerns.map(toConcernView) })
-        );
-        controller.enqueue(encodeEvent({ type: "done" }));
+          if (result === "timeout") {
+            continue; // pendingNext is still outstanding; loop re-checks remaining above
+          }
+          if (result.done) {
+            sendTerminal({ type: "done" });
+            return;
+          }
+
+          pendingNext = pipeline.next();
+          const event = result.value;
+          switch (event.type) {
+            case "facts":
+              controller.enqueue(
+                encodeEvent({ type: "facts", patient: event.patient, usedMockProvider: event.usedMockProvider })
+              );
+              break;
+            case "concern":
+              controller.enqueue(
+                encodeEvent({ type: "concern", index: event.index, concern: toConcernShellView(event.concern) })
+              );
+              break;
+            case "concernRules":
+              controller.enqueue(
+                encodeEvent({
+                  type: "concernRules",
+                  index: event.index,
+                  ruleApplications: toRuleViews(event.ruleApplications),
+                })
+              );
+              break;
+            case "timing":
+              console.log(
+                `[safety-check timing] stage=${event.timing.stage} model=${event.timing.model} ` +
+                  `durationMs=${Math.round(event.timing.durationMs)} inputTokens=${event.timing.inputTokens ?? "?"} ` +
+                  `outputTokens=${event.timing.outputTokens ?? "?"}`
+              );
+              controller.enqueue(
+                encodeEvent({
+                  type: "timing",
+                  stage: event.timing.stage,
+                  model: event.timing.model,
+                  durationMs: Math.round(event.timing.durationMs),
+                  inputTokens: event.timing.inputTokens,
+                  outputTokens: event.timing.outputTokens,
+                })
+              );
+              break;
+          }
+        }
       } catch (err) {
         console.error("Safety check failed:", err);
-        controller.enqueue(encodeEvent({ type: "error", ...classifyError(err) }));
-      } finally {
-        controller.close();
+        sendTerminal({ type: "error", ...classifyError(err) });
       }
     },
   });

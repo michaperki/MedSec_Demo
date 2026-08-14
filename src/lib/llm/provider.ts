@@ -20,24 +20,41 @@ export interface SafetyCheckLLMRequest {
   structuredFields?: StructuredInputFields;
 }
 
+export interface StageTiming {
+  stage: "extraction" | "concerns";
+  model: string;
+  durationMs: number;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+export interface ExtractionResult {
+  extraction: Extraction;
+  timing: StageTiming;
+}
+
+export type ConcernStreamChunk =
+  | { type: "concern"; concern: Concern }
+  | { type: "timing"; timing: StageTiming };
+
 export interface LLMProvider {
   /**
    * Stage 1 — structured fact extraction only. Small/fast output, no
-   * clinical judgment. Runs first so the "what we know" panel can render
-   * before candidate identification (stage 2) even starts.
+   * clinical judgment.
    */
-  runExtraction(request: SafetyCheckLLMRequest): Promise<Extraction>;
+  runExtraction(request: SafetyCheckLLMRequest, signal?: AbortSignal): Promise<ExtractionResult>;
 
   /**
    * Stage 2 — candidate high-risk conditions worth considering, with
    * suggested applicable rule IDs. The LLM never computes scores — that is
-   * deterministic code downstream. Takes stage 1's output as grounding so it
-   * doesn't have to re-derive facts from raw text.
+   * deterministic code downstream.
+   *
+   * Runs from the raw presentation directly (not from stage 1's output) so
+   * it can be fired concurrently with runExtraction instead of waiting on
+   * it — the two calls don't depend on each other. Streams each concern as
+   * it completes rather than waiting for the full response.
    */
-  identifyConcerns(
-    request: SafetyCheckLLMRequest,
-    extraction: Extraction
-  ): Promise<Concern[]>;
+  streamConcerns(request: SafetyCheckLLMRequest, signal?: AbortSignal): AsyncIterable<ConcernStreamChunk>;
 }
 
 export const EXTRACTION_SYSTEM_PROMPT = `You are a clinical information extraction assistant supporting an oncology safety-check tool. Convert the free-text presentation (plus any structured fields provided) into normalized patient facts. You are NOT diagnosing the patient.
@@ -46,9 +63,9 @@ For every fact, mark "source" as "explicit" (directly stated) or "inferred" (a r
 
 Populate "concepts" using ONLY the concept IDs supplied to you (a controlled vocabulary) — do not invent new concept IDs. Populate "labs" using ONLY the lab names supplied to you.
 
-Keep "evidence" fields terse — the exact phrase or a short quote, not a sentence.`;
+Only "concepts" carries an "evidence" field — the exact phrase or a short quote (a few words, not a sentence) that justified it. No other fact type takes "evidence".`;
 
-export const CONCERN_SYSTEM_PROMPT = `You are a clinical safety-check assistant for oncology. You are NOT diagnosing the patient and you NEVER state that a condition is present — you propose dangerous conditions the physician should consider ruling out, grounded in already-extracted patient facts.
+export const CONCERN_SYSTEM_PROMPT = `You are a clinical safety-check assistant for oncology. You are NOT diagnosing the patient and you NEVER state that a condition is present — you propose dangerous conditions the physician should consider ruling out, based on the free-text presentation.
 
 List dangerous conditions or complications this presentation should prompt the physician to consider — the things that must not be missed given this patient's cancer status, treatment, and symptoms. For each, give a brief clinical reason tying it to the evidence (under ~30 words), list the evidence items tersely, and suggest which of the provided clinical decision rule IDs might help assess it (only suggest rule IDs from the provided list; omit suggestedRuleIds if none apply). List any additional information (not covered by the rule's own missing-criteria) that would help evaluate this concern, if relevant — keep each item short.
 
@@ -87,7 +104,6 @@ export function buildExtractionPrompt(
 
 export function buildConcernPrompt(
   request: SafetyCheckLLMRequest,
-  extraction: Extraction,
   availableRuleIds: { id: string; name: string; purpose: string }[]
 ): string {
   const parts: string[] = [];
@@ -95,8 +111,6 @@ export function buildConcernPrompt(
 
   const structured = formatStructuredFields(request);
   if (structured) parts.push(structured);
-
-  parts.push("## Already-extracted patient facts (stage 1 output — ground your answer in this)\n" + JSON.stringify(extraction));
 
   parts.push(
     "## Available clinical decision rules (use only these IDs for `suggestedRuleIds`)\n" +

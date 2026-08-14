@@ -1,4 +1,4 @@
-import type { ConcernView } from "@/lib/api-types";
+import type { ConcernShellView, RuleView } from "@/lib/api-types";
 import { CriterionTable } from "./CriterionTable";
 import { EvidenceReferences } from "./EvidenceReferences";
 
@@ -12,11 +12,19 @@ function bandTone(label: string | undefined): string {
   return "text-slate-600";
 }
 
-export function ConcernCard({ concern }: { concern: ConcernView }) {
+export function ConcernCard({
+  concern,
+  ruleApplications,
+}: {
+  concern: ConcernShellView;
+  /** null while rule scoring is still waiting on patient facts to land. */
+  ruleApplications: RuleView[] | null;
+}) {
+  const rulesPending = ruleApplications === null;
   const allMissing = Array.from(
     new Set([
       ...concern.additionalMissingInformation,
-      ...concern.ruleApplications.flatMap((r) => r.missingInformation),
+      ...(ruleApplications ?? []).flatMap((r) => r.missingInformation),
     ])
   );
 
@@ -46,13 +54,20 @@ export function ConcernCard({ concern }: { concern: ConcernView }) {
           )}
         </div>
 
-        {concern.ruleApplications.length > 0 && (
+        {rulesPending && (
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-300" />
+            Matching decision rules…
+          </div>
+        )}
+
+        {!rulesPending && ruleApplications.length > 0 && (
           <div>
             <h4 className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
               Applicable decision tools
             </h4>
             <div className="mt-2 space-y-4">
-              {concern.ruleApplications.map((rule) => (
+              {ruleApplications.map((rule) => (
                 <div key={rule.id} className="rounded-md border border-slate-100 bg-slate-50/60 p-3">
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="text-sm font-medium text-slate-800">{rule.name}</span>

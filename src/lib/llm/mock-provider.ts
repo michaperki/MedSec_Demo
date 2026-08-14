@@ -1,6 +1,11 @@
 import type { ConceptId, LabName } from "../concepts";
 import type { Concern, Extraction } from "./schema";
-import type { LLMProvider, SafetyCheckLLMRequest } from "./provider";
+import type {
+  ConcernStreamChunk,
+  ExtractionResult,
+  LLMProvider,
+  SafetyCheckLLMRequest,
+} from "./provider";
 
 function requestText(request: SafetyCheckLLMRequest): string {
   return [request.presentation, ...Object.values(request.structuredFields ?? {})]
@@ -16,12 +21,29 @@ function requestText(request: SafetyCheckLLMRequest): string {
  * synonyms, nothing more.
  */
 export class MockLLMProvider implements LLMProvider {
-  async runExtraction(request: SafetyCheckLLMRequest): Promise<Extraction> {
-    return extractFacts(requestText(request), request);
+  async runExtraction(request: SafetyCheckLLMRequest): Promise<ExtractionResult> {
+    const start = performance.now();
+    const extraction = extractFacts(requestText(request), request);
+    return {
+      extraction,
+      timing: { stage: "extraction", model: "mock", durationMs: performance.now() - start },
+    };
   }
 
-  async identifyConcerns(request: SafetyCheckLLMRequest, extraction: Extraction): Promise<Concern[]> {
-    return deriveConcerns(extraction, requestText(request));
+  async *streamConcerns(request: SafetyCheckLLMRequest): AsyncGenerator<ConcernStreamChunk> {
+    const start = performance.now();
+    // The mock provider has no real extraction/concerns split — it derives
+    // both from the same regex pass over the text, independent of whatever
+    // the (also-running) runExtraction call produces. That keeps the mock
+    // provider's two methods as independently callable as the real one's.
+    const facts = extractFacts(requestText(request), request);
+    for (const concern of deriveConcerns(facts, requestText(request))) {
+      yield { type: "concern", concern };
+    }
+    yield {
+      type: "timing",
+      timing: { stage: "concerns", model: "mock", durationMs: performance.now() - start },
+    };
   }
 }
 
@@ -127,10 +149,6 @@ function extractFacts(text: string, request: SafetyCheckLLMRequest): Extraction 
     activeTreatment: treatmentMatch
       ? { value: treatmentMatch[0].trim(), source: "explicit" }
       : undefined,
-    symptoms: [],
-    conditions: [],
-    medications: [],
-    treatments: [],
     vitals: {
       heartRate: heartRateFact,
       systolicBP: sbpFact,
@@ -140,7 +158,6 @@ function extractFacts(text: string, request: SafetyCheckLLMRequest): Extraction 
       oxygenSaturation: spo2Fact,
     },
     labs,
-    history: [],
     concepts,
   };
 }

@@ -1,15 +1,18 @@
 import type { PatientContext } from "./patient";
-import type { ConcernView } from "./api-types";
+import type { ConcernShellView, RuleView } from "./api-types";
 
 /**
  * NDJSON events streamed from /api/safety-check, one JSON object per line.
- * Each event corresponds to a real pipeline transition, not a timer — the
- * client's staged progress indicator is driven directly off these.
+ * Extraction and concern identification run concurrently and concerns
+ * stream in as the model produces them, so `concern` may arrive before or
+ * after `facts` — `concernRules` always follows once both a concern and
+ * patient facts are available, whichever order that happens to be.
  */
 export type SafetyCheckStreamEvent =
   | { type: "facts"; patient: PatientContext; usedMockProvider: boolean }
-  | { type: "stage"; stage: "assembling" }
-  | { type: "concerns"; concerns: ConcernView[] }
+  | { type: "concern"; index: number; concern: ConcernShellView }
+  | { type: "concernRules"; index: number; ruleApplications: RuleView[] }
+  | { type: "timing"; stage: string; model: string; durationMs: number; inputTokens?: number; outputTokens?: number }
   | { type: "done" }
   | { type: "error"; message: string; kind: ErrorKind };
 

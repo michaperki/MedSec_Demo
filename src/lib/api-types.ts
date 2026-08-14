@@ -1,5 +1,6 @@
 import type { CriterionResult, Reference, ScoreBand } from "./rules";
 import type { RuleApplication, SafetyCheckResult } from "./safety-check";
+import type { Concern } from "./llm";
 
 /** JSON-safe view of a rule criterion — no function fields. */
 export interface CriterionView {
@@ -30,6 +31,27 @@ export interface ConcernView {
   evidence: string[];
   ruleApplications: RuleView[];
   additionalMissingInformation: string[];
+}
+
+/** A concern's condition/reason/evidence, before its rule tables have joined. */
+export interface ConcernShellView {
+  condition: string;
+  reason: string;
+  evidence: string[];
+  additionalMissingInformation: string[];
+}
+
+export function toConcernShellView(concern: Concern): ConcernShellView {
+  return {
+    condition: concern.condition,
+    reason: concern.reason,
+    evidence: concern.evidence,
+    additionalMissingInformation: concern.additionalMissingInformation,
+  };
+}
+
+export function toRuleViews(apps: RuleApplication[]): RuleView[] {
+  return apps.map(toRuleView);
 }
 
 function toRuleView(app: RuleApplication): RuleView {

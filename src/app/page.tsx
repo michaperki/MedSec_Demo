@@ -6,23 +6,32 @@ import { DEMO_FIXTURES } from "@/lib/demo-fixtures";
 import type { MockChartRecord } from "@/lib/data-provider";
 import type { StructuredInputFields } from "@/lib/llm/provider";
 import type { PatientContext } from "@/lib/patient";
-import type { ConcernView } from "@/lib/api-types";
+import type { ConcernShellView, RuleView } from "@/lib/api-types";
 import type { SafetyCheckStreamEvent, ErrorKind } from "@/lib/stream-events";
 import { ChartPanel } from "@/components/ChartPanel";
 import { ConcernCard } from "@/components/ConcernCard";
 import { PatientFactsSummary } from "@/components/PatientFactsSummary";
-import { ProgressStages, type PipelineStage } from "@/components/ProgressStages";
 
-type Status = "idle" | "loading" | "error" | "done";
+type Status = "idle" | "running" | "error" | "done";
 
-interface ResultState {
-  patient: PatientContext;
-  concerns: ConcernView[];
-  usedMockProvider: boolean;
-  fromFixture: boolean;
+interface ConcernSlot {
+  shell: ConcernShellView;
+  /** null until concernRules lands — patient facts and this concern may arrive in either order. */
+  ruleApplications: RuleView[] | null;
+}
+
+interface TimingEntry {
+  stage: string;
+  model: string;
+  durationMs: number;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 const EXPANDED_COUNT = 2;
+// Just above the server's own ~50s internal deadline — a safety net in case
+// the server process dies without closing the stream gracefully.
+const CLIENT_ABORT_MS = 55_000;
 
 function fieldsEqual(a: StructuredInputFields, b: StructuredInputFields | undefined): boolean {
   const keys: (keyof StructuredInputFields)[] = [
@@ -47,9 +56,12 @@ export default function Home() {
   const [showStructured, setShowStructured] = useState(false);
 
   const [status, setStatus] = useState<Status>("idle");
-  const [stage, setStage] = useState<PipelineStage>("extracting");
+  const [patient, setPatient] = useState<PatientContext | null>(null);
+  const [usedMockProvider, setUsedMockProvider] = useState(false);
+  const [fromFixture, setFromFixture] = useState(false);
+  const [concernSlots, setConcernSlots] = useState<ConcernSlot[]>([]);
   const [error, setError] = useState<{ message: string; kind: ErrorKind } | null>(null);
-  const [result, setResult] = useState<ResultState | null>(null);
+  const [timings, setTimings] = useState<TimingEntry[]>([]);
 
   // True only when the current inputs exactly match a demo case as loaded —
   // this is what gates the instant-fixture path. Any edit routes through the
@@ -62,29 +74,52 @@ export default function Home() {
     setSelectedCase(record);
     setPresentation(record.todaysEncounter);
     setStructuredFields(record.structuredFields ?? {});
-    setResult(null);
-    setError(null);
     setStatus("idle");
+    setPatient(null);
+    setConcernSlots([]);
+    setError(null);
+    setTimings([]);
   }
 
   async function runSafetyCheck() {
-    setStatus("loading");
-    setStage("extracting");
+    setStatus("running");
     setError(null);
-    setResult(null);
+    setPatient(null);
+    setUsedMockProvider(false);
+    setFromFixture(false);
+    setConcernSlots([]);
+    setTimings([]);
 
     const fixture = isUneditedDemoCase ? DEMO_FIXTURES[selectedCase.id] : undefined;
     if (fixture) {
-      setResult({ ...fixture, fromFixture: true });
+      setPatient(fixture.patient);
+      setUsedMockProvider(fixture.usedMockProvider);
+      setFromFixture(true);
+      setConcernSlots(
+        fixture.concerns.map((c) => ({
+          shell: {
+            condition: c.condition,
+            reason: c.reason,
+            evidence: c.evidence,
+            additionalMissingInformation: c.additionalMissingInformation,
+          },
+          ruleApplications: c.ruleApplications,
+        }))
+      );
       setStatus("done");
       return;
     }
+
+    const abortController = new AbortController();
+    const abortTimer = setTimeout(() => abortController.abort(), CLIENT_ABORT_MS);
+    let receivedTerminal = false;
 
     try {
       const res = await fetch("/api/safety-check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ presentation, structuredFields }),
+        signal: abortController.signal,
       });
 
       if (!res.ok || !res.body) {
@@ -95,8 +130,6 @@ export default function Home() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let patient: PatientContext | null = null;
-      let usedMockProvider = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -112,46 +145,83 @@ export default function Home() {
           const event = JSON.parse(line) as SafetyCheckStreamEvent;
           switch (event.type) {
             case "facts":
-              patient = event.patient;
-              usedMockProvider = event.usedMockProvider;
-              setStage("matching");
+              setPatient(event.patient);
+              setUsedMockProvider(event.usedMockProvider);
               break;
-            case "stage":
-              setStage(event.stage);
+            case "concern":
+              setConcernSlots((prev) => {
+                const next = [...prev];
+                next[event.index] = { shell: event.concern, ruleApplications: null };
+                return next;
+              });
               break;
-            case "concerns":
-              if (patient) {
-                setResult({
-                  patient,
-                  concerns: event.concerns,
-                  usedMockProvider,
-                  fromFixture: false,
-                });
-              }
+            case "concernRules":
+              setConcernSlots((prev) => {
+                if (!prev[event.index]) return prev;
+                const next = [...prev];
+                next[event.index] = { ...next[event.index], ruleApplications: event.ruleApplications };
+                return next;
+              });
+              break;
+            case "timing":
+              setTimings((prev) => [
+                ...prev,
+                {
+                  stage: event.stage,
+                  model: event.model,
+                  durationMs: event.durationMs,
+                  inputTokens: event.inputTokens,
+                  outputTokens: event.outputTokens,
+                },
+              ]);
+              console.debug(
+                `[safety-check] ${event.stage} — ${event.model} — ${event.durationMs}ms ` +
+                  `(in=${event.inputTokens ?? "?"} out=${event.outputTokens ?? "?"})`
+              );
               break;
             case "done":
+              receivedTerminal = true;
               setStatus("done");
               break;
             case "error":
+              receivedTerminal = true;
               setError({ message: event.message, kind: event.kind });
               setStatus("error");
               break;
           }
         }
       }
+
+      // The server always sends `done` or `error` before closing the stream.
+      // If neither arrived, the connection dropped mid-flight — that's an
+      // error state, not "still loading forever".
+      if (!receivedTerminal) {
+        setError({
+          message: "The connection closed before the safety check finished. Try again.",
+          kind: "unknown",
+        });
+        setStatus("error");
+      }
     } catch (e) {
+      const aborted = e instanceof DOMException && e.name === "AbortError";
       setError({
-        message: e instanceof Error ? e.message : "Something went wrong.",
-        kind: "unknown",
+        message: aborted
+          ? "This is taking longer than expected and was cancelled. Try again."
+          : e instanceof Error
+          ? e.message
+          : "Something went wrong.",
+        kind: aborted ? "timeout" : "unknown",
       });
       setStatus("error");
+    } finally {
+      clearTimeout(abortTimer);
     }
   }
 
-  const loading = status === "loading";
-  const concerns = result?.concerns ?? [];
-  const expanded = concerns.slice(0, EXPANDED_COUNT);
-  const collapsed = concerns.slice(EXPANDED_COUNT);
+  const loading = status === "running";
+  const hasContent = !!patient || concernSlots.length > 0;
+  const expanded = concernSlots.slice(0, EXPANDED_COUNT);
+  const collapsed = concernSlots.slice(EXPANDED_COUNT);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -275,17 +345,22 @@ export default function Home() {
             </div>
           )}
 
-          {loading && <ProgressStages stage={stage} />}
+          {loading && !hasContent && (
+            <div className="flex h-64 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white text-sm text-slate-400">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400" />
+              Starting analysis…
+            </div>
+          )}
 
-          {result && (
+          {hasContent && (
             <>
-              {result.fromFixture && (
+              {fromFixture && (
                 <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
                   Instant result from a precomputed fixture for this demo case. Edit the
                   presentation or structured fields to run a live check instead.
                 </div>
               )}
-              {result.usedMockProvider && (
+              {usedMockProvider && (
                 <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
                   No ANTHROPIC_API_KEY configured — using the deterministic demo extractor
                   (keyword matching tuned to the demo cases), not a live model call.
@@ -293,32 +368,66 @@ export default function Home() {
               )}
 
               <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <PatientFactsSummary patient={result.patient} />
-              </div>
-
-              <div>
-                <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
-                  Potential high-risk conditions to consider
-                </h2>
-                <div className="space-y-4">
-                  {expanded.map((concern, i) => (
-                    <ConcernCard key={i} concern={concern} />
-                  ))}
-                </div>
-
-                {collapsed.length > 0 && (
-                  <details className="group mt-4">
-                    <summary className="cursor-pointer select-none text-xs font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-600">
-                      Other conditions considered ({collapsed.length})
-                    </summary>
-                    <div className="mt-3 space-y-4">
-                      {collapsed.map((concern, i) => (
-                        <ConcernCard key={i} concern={concern} />
-                      ))}
-                    </div>
-                  </details>
+                {patient ? (
+                  <PatientFactsSummary patient={patient} />
+                ) : (
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-300" />
+                    Extracting clinical facts…
+                  </div>
                 )}
               </div>
+
+              {concernSlots.length > 0 && (
+                <div>
+                  <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                    Potential high-risk conditions to consider
+                  </h2>
+                  <div className="space-y-4">
+                    {expanded.map((slot, i) => (
+                      <ConcernCard key={i} concern={slot.shell} ruleApplications={slot.ruleApplications} />
+                    ))}
+                  </div>
+
+                  {collapsed.length > 0 && (
+                    <details className="group mt-4">
+                      <summary className="cursor-pointer select-none text-xs font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-600">
+                        Other conditions considered ({collapsed.length})
+                      </summary>
+                      <div className="mt-3 space-y-4">
+                        {collapsed.map((slot, i) => (
+                          <ConcernCard key={i} concern={slot.shell} ruleApplications={slot.ruleApplications} />
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              )}
+
+              {loading && (
+                <p className="flex items-center gap-2 text-xs text-slate-400">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-300" />
+                  {concernSlots.length === 0
+                    ? "Identifying potential concerns…"
+                    : "Checking for additional concerns…"}
+                </p>
+              )}
+
+              {process.env.NODE_ENV !== "production" && timings.length > 0 && (
+                <details className="text-xs text-slate-400">
+                  <summary className="cursor-pointer select-none hover:text-slate-600">
+                    Timing (dev only)
+                  </summary>
+                  <ul className="mt-1 space-y-0.5 font-mono">
+                    {timings.map((t, i) => (
+                      <li key={i}>
+                        {t.stage} · {t.model} · {Math.round(t.durationMs)}ms · in={t.inputTokens ?? "?"}{" "}
+                        out={t.outputTokens ?? "?"}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </>
           )}
         </div>

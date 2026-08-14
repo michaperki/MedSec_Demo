@@ -5,8 +5,17 @@ export type FactSource = "explicit" | "inferred";
 export interface ClinicalFact<T = unknown> {
   value: T;
   source: FactSource;
+}
+
+/**
+ * A boolean concept fact carries `evidence` — the quoted phrase that
+ * justified it — because it's shown as the criterion detail text in rule
+ * tables (see `fromConcept` in rules/helpers.ts). Numeric/string facts don't
+ * carry evidence: nothing in the UI renders it for them, so the extraction
+ * schema doesn't ask the model to produce it.
+ */
+export interface ConceptFact extends ClinicalFact<boolean> {
   evidence?: string;
-  confidence?: number;
 }
 
 export interface PatientContext {
@@ -16,10 +25,6 @@ export interface PatientContext {
   };
   cancerDiagnosis?: ClinicalFact<string>;
   activeTreatment?: ClinicalFact<string>;
-  conditions: ClinicalFact<string>[];
-  symptoms: ClinicalFact<string>[];
-  medications: ClinicalFact<string>[];
-  treatments: ClinicalFact<string>[];
   vitals: {
     heartRate?: ClinicalFact<number>;
     systolicBP?: ClinicalFact<number>;
@@ -29,27 +34,21 @@ export interface PatientContext {
     oxygenSaturation?: ClinicalFact<number>;
   };
   labs: Partial<Record<LabName, ClinicalFact<number>>>;
-  history: ClinicalFact<string>[];
   /**
    * Normalized clinical concepts extracted from free text — the substrate
    * deterministic rule criteria resolve against. Never populate a concept
    * the source text does not support; "unknown" means absent from the model,
    * not the same as "no" clinically.
    */
-  concepts: Partial<Record<ConceptId, ClinicalFact<boolean>>>;
+  concepts: Partial<Record<ConceptId, ConceptFact>>;
   rawPresentation: string;
 }
 
 export function emptyPatientContext(rawPresentation = ""): PatientContext {
   return {
     demographics: {},
-    conditions: [],
-    symptoms: [],
-    medications: [],
-    treatments: [],
     vitals: {},
     labs: {},
-    history: [],
     concepts: {},
     rawPresentation,
   };
